@@ -4,6 +4,8 @@ A small program to dedup Node.js modules and hoist them up to the root node_modu
 
 This module fixes a problem in the build process for [Data-Forge Notebook](https://www.data-forge-notebook.com/). Using pnpm produces symbolic links to share modules between packages in a workspace. Unfortunately this messes up the Electron build becuase it converts the symbolic links to duplicate modules.
 
+[Click here to support my work](https://www.codecapers.com.au/about#support-my-work).
+
 ## Usage
 
 ```bash

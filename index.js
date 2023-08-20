@@ -30,16 +30,31 @@ async function indexNodeModules(dir, modulePrefix, moduleIndex) {
         }
 
         //
+        // Load version number for the package.
+        //
+        const packageJsonPath = `${packagePath}/package.json`;
+        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
+        const packageVersion = packageJson.version;
+
+        //
         // Add this package to the index.
         //
         const moduleName = `${modulePrefix}${file}`;
         if (moduleIndex[moduleName] === undefined) {
-            moduleIndex[moduleName] = [
-                packagePath,
-            ];
+            moduleIndex[moduleName] = {
+                name: moduleName,
+                version: packageVersion,
+                paths: [
+                    packagePath,
+                ],
+            };
         }
         else {
-            moduleIndex[moduleName].push(packagePath);
+            const moduleRecord = moduleIndex[moduleName];
+            if (moduleRecord.version !== packageVersion) {
+                throw new Error(`Version mismatch for module ${moduleName}: ${moduleRecord.version} vs ${packageVersion}`);
+            }
+            moduleRecord.paths.push(packagePath);
         }
     }
 }
@@ -55,7 +70,7 @@ async function copyDir(srcDir, destDir) {
 
     for (let entry of entries) {
         if (entry.name === "node_modules") {
-            console.log(`Skipping nested node_modules directory in ${srcDir}`);
+            // console.log(`Skipping nested node_modules directory in ${srcDir}`);
             continue;
         }
         const srcPath = path.join(srcDir, entry.name);
@@ -78,18 +93,19 @@ async function hoistModules(moduleIndex, targetDir) {
     let total = 0;
     let copied = 0;
 
-    for ([ moduleName, modulePaths ] of Object.entries(moduleIndex)) {
-        if (modulePaths.length === 0) {
+    for ([ moduleName, moduleRecord ] of Object.entries(moduleIndex)) {
+        if (moduleRecord.paths.length === 0) {
             continue;
         }
+
         //
         // Copy the first duplicate to the target path.
         //
-        const modulePath = modulePaths[0];
+        const modulePath = moduleRecord.paths[0];
         const targetPath = `${targetDir}/${moduleName}`;
         await copyDir(modulePath, targetPath);
         copied += 1;
-        total += modulePaths.length;
+        total += moduleRecord.paths.length;
     }
 
     console.log(`Original modules: ${total}`);
