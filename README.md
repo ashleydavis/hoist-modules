@@ -8,9 +8,19 @@ This module fixes a problem in the build process for [Data-Forge Notebook](https
 
 ## Usage
 
+Globally instaled:
+
 ```bash
 npm install -g hoist-modules
 hoist-modules <root-node_modules-directory> <target-dir> [--force]
+```
+
+Installed in your project:
+
+```bash
+cd my-project
+npm install --dev hoist-modules
+npx hoist-modules <root-node_modules-directory> <target-dir> [--force]
 ```
 
 ## Run it for development
@@ -33,5 +43,3 @@ Or run it with live reload:
 ```bash
 npm run dev -- <root-node_modules-directory> <target-dir> -- --force
 ```
-
-npm run dev --  c:/projects/data-forge-notebook/editor-core/shells/electron/node_modules -- --force
