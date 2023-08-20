@@ -10,7 +10,7 @@ This module fixes a problem in the build process for [Data-Forge Notebook](https
 
 ```bash
 npm install -g hoist-modules
-hoist-modules <root-node_modules-directory>
+hoist-modules <root-node_modules-directory> <target-dir> [--force]
 ```
 
 ## Run it for development
@@ -25,11 +25,13 @@ npm install
 Run it:
 
 ```bash
-npm run start
+npm run start -- <root-node_modules-directory> <target-dir> -- --force
 ```
 
 Or run it with live reload: 
 
 ```bash
-npm run dev
+npm run dev -- <root-node_modules-directory> <target-dir> -- --force
 ```
+
+npm run dev --  c:/projects/data-forge-notebook/editor-core/shells/electron/node_modules -- --force

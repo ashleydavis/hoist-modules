@@ -114,8 +114,14 @@ async function hoistModules(moduleIndex, targetDir) {
 
 async function main() {
     var argv = minimist(process.argv.slice(2));
+    if (argv._.length !== 2) {
+        console.error(`Need two arguments.`);
+        console.error(`Usage: hoist-modules <sourceDir> <targetDir> [--force]`);
+        process.exit(1);
+    }
+
     const sourceDir = argv._[0];
-    const targetDir = "./tmp";
+    const targetDir = argv._[1];
 
     console.log(`Hoisting modules from ${sourceDir} to ${targetDir}`);
 

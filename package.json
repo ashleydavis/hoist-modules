@@ -4,8 +4,8 @@
     "description": "",
     "main": "index.js",
     "scripts": {
-        "start": "index.js c:\\projects\\data-forge-notebook\\editor-core\\shells\\electron\\node_modules -- --force ",
-        "dev": "node-dev --respawn index.js c:\\projects\\data-forge-notebook\\editor-core\\shells\\electron\\node_modules -- --force"
+        "start": "index.js",
+        "dev": "node-dev --respawn index.js"
     },
     "keywords": [],
     "author": "ashley@codecapers.com.au",
