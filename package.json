@@ -1,6 +1,6 @@
 {
     "name": "hoist-modules",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "",
     "main": "index.js",
     "scripts": {
@@ -15,7 +15,7 @@
         "minimist": "^1.2.8"
     },
     "bin": {
-        "typescript-template-cli": "cli"
+        "hoist-modules": "cli"
     },
     "devDependencies": {
         "node-dev": "^8.0.0"
