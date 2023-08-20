@@ -1,0 +1,23 @@
+{
+    "name": "hoist-modules",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "start": "index.js c:\\projects\\data-forge-notebook\\editor-core\\shells\\electron\\node_modules -- --force ",
+        "dev": "node-dev --respawn index.js c:\\projects\\data-forge-notebook\\editor-core\\shells\\electron\\node_modules -- --force"
+    },
+    "keywords": [],
+    "author": "ashley@codecapers.com.au",
+    "license": "MIT",
+    "dependencies": {
+        "fs-extra": "^11.1.1",
+        "minimist": "^1.2.8"
+    },
+    "bin": {
+        "typescript-template-cli": "cli"
+    },
+    "devDependencies": {
+        "node-dev": "^8.0.0"
+    }
+}
