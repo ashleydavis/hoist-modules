@@ -137,7 +137,7 @@ async function main() {
 
     const moduleIndex = {};
     await indexNodeModules(sourceDir, "", moduleIndex);
-    console.log(moduleIndex);
+    // console.log(moduleIndex);
 
     await fs.ensureDir(targetDir);
     await hoistModules(moduleIndex, targetDir); 
