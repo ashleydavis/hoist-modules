@@ -112,6 +112,17 @@ async function hoistModules(moduleIndex, targetDir) {
     console.log(`Hoisted modules: ${copied}`);
 }
 
+//
+// Hoist modules in sourceDir to the root directory in the darget directory.
+//
+async function hoist(sourceDir, targetDir) {
+    const moduleIndex = {};
+    await indexNodeModules(sourceDir, "", moduleIndex);
+    // console.log(moduleIndex);
+    await fs.ensureDir(targetDir);
+    await hoistModules(moduleIndex, targetDir);
+}
+
 async function main() {
     var argv = minimist(process.argv.slice(2));
     if (argv._.length !== 2) {
@@ -135,19 +146,12 @@ async function main() {
         }
     }
 
-    const moduleIndex = {};
-    await indexNodeModules(sourceDir, "", moduleIndex);
-    // console.log(moduleIndex);
-
-    await fs.ensureDir(targetDir);
-    await hoistModules(moduleIndex, targetDir); 
+    await hoist(sourceDir, targetDir); 
 
     console.log(`Done.`);
 }
 
-main()
-    .catch(err => {
-        console.error(`Failed with error:`);
-        console.error(err && err.stack || err);
-        process.exit(1);
-    });
+module.exports = {
+    hoist,
+    main,
+};
