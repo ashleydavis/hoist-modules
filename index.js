@@ -52,7 +52,11 @@ async function indexNodeModules(dir, modulePrefix, moduleIndex) {
         else {
             const moduleRecord = moduleIndex[moduleName];
             if (moduleRecord.version !== packageVersion) {
-                throw new Error(`Version mismatch for module ${moduleName}: ${moduleRecord.version} vs ${packageVersion}`);
+                throw new Error(
+                    `Version mismatch for module ${moduleName}\r\n` +
+                    `The following modules have version ${moduleRecord.version}:\r\n` +
+                    `  ` + moduleRecord.paths.join("\r\n  ") +
+                    `\r\nBut the module at ${packagePath} has version ${packageVersion}.`);
             }
             moduleRecord.paths.push(packagePath);
         }

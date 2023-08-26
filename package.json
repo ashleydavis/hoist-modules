@@ -1,11 +1,11 @@
 {
     "name": "hoist-modules",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "",
     "main": "index.js",
     "scripts": {
-        "start": "index.js",
-        "dev": "node-dev --respawn index.js"
+        "start": "cli",
+        "dev": "node-dev --respawn cli"
     },
     "keywords": [],
     "author": "ashley@codecapers.com.au",
