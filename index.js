@@ -1,66 +1,63 @@
 const minimist = require("minimist");
 const fs = require("fs-extra");
 const path = require("path");
+const semver = require('semver');
 
 //
-// Walk all nested subdirectories of a node_modules directory and build an index of modules.
+// Reads the dependencies that are installed in a particular directory.
 //
-async function indexNodeModules(dir, modulePrefix, moduleIndex) {
-    
-    const files = await fs.readdir(dir);
+async function* readInstalledDependencies(dir) {
+    if (!await fs.pathExists(dir)) {
+        // Nothing to see here.
+        return;
+    }
 
-    for (const file of files) {
-        if (file.startsWith(".")) {
+    const stat = await fs.stat(dir);
+    if (!stat.isDirectory()) {
+        // It's not actually a subdirectory.
+        return;
+    }
+
+    const subDirs = await fs.readdir(dir);
+    for (const subDir of subDirs) {
+        if (subDir === ".bin") {
             continue;
         }
 
-        const packagePath = `${dir}/${file}`;
-
-        if (file.startsWith("@")) {
-            await indexNodeModules(packagePath, `${file}/`, moduleIndex);
-            continue;
-        }
-
-        const packageNodeModulesPath = `${packagePath}/node_modules`;
-        if (await fs.pathExists(packageNodeModulesPath)) {
-            //
-            // Nested modules.
-            //
-            await indexNodeModules(packageNodeModulesPath, "", moduleIndex);
-        }
-
-        //
-        // Load version number for the package.
-        //
-        const packageJsonPath = `${packagePath}/package.json`;
-        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
-        const packageVersion = packageJson.version;
-
-        //
-        // Add this package to the index.
-        //
-        const moduleName = `${modulePrefix}${file}`;
-        if (moduleIndex[moduleName] === undefined) {
-            moduleIndex[moduleName] = {
-                name: moduleName,
-                version: packageVersion,
-                paths: [
-                    packagePath,
-                ],
-            };
+        const subDirPath = path.join(dir, subDir);
+        const packageJsonPath = path.join(subDirPath, "package.json");
+        if (await fs.pathExists(packageJsonPath)) {
+            yield await buildDependencyTree(subDirPath);
         }
         else {
-            const moduleRecord = moduleIndex[moduleName];
-            if (moduleRecord.version !== packageVersion) {
-                throw new Error(
-                    `Version mismatch for module ${moduleName}\r\n` +
-                    `The following modules have version ${moduleRecord.version}:\r\n` +
-                    `  ` + moduleRecord.paths.join("\r\n  ") +
-                    `\r\nBut the module at ${packagePath} has version ${packageVersion}.`);
-            }
-            moduleRecord.paths.push(packagePath);
+            yield* await readInstalledDependencies(subDirPath);
         }
     }
+}
+
+//
+// Builds the dependency tree for a module.
+//
+async function buildDependencyTree(dir) {
+
+    // Loads the package file.
+    const packageJsonPath = path.join(dir, "package.json");
+    const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
+
+    // Determine dependencies in node_modules.
+    const nodeModulesPath = path.join(dir, "node_modules");
+    const installedDependencies = {};
+    for await (const dependency of readInstalledDependencies(nodeModulesPath)) {
+        installedDependencies[dependency.name] = dependency;
+    }
+
+    return {
+        name: packageJson.name,
+        version: packageJson.version,
+        dir: dir,
+        wantDependencies: packageJson.dependencies || {},
+        installedDependencies,
+    };
 }
 
 //
@@ -86,45 +83,135 @@ async function copyDir(srcDir, destDir) {
         }
     }
 }
-//
-// Hoist all modules to the root and remove duplicates.
-//
-// NOTE: This assumes all modules are the same version. A 
-// better implementation would check for version conflicts.
-//
-async function hoistModules(moduleIndex, targetDir) {
 
-    let total = 0;
-    let copied = 0;
-
-    for ([ moduleName, moduleRecord ] of Object.entries(moduleIndex)) {
-        if (moduleRecord.paths.length === 0) {
-            continue;
-        }
-
-        //
-        // Copy the first duplicate to the target path.
-        //
-        const modulePath = moduleRecord.paths[0];
-        const targetPath = `${targetDir}/${moduleName}`;
-        await copyDir(modulePath, targetPath);
-        copied += 1;
-        total += moduleRecord.paths.length;
+//
+// Finds the pnpm directory, if it exists.
+//
+async function findPnpmDir(dir) {
+    const pnpmDir = path.join(dir, "node_modules", ".pnpm");
+    if (await fs.pathExists(pnpmDir)) {
+        return pnpmDir;
     }
-
-    console.log(`Original modules: ${total}`);
-    console.log(`Hoisted modules: ${copied}`);
+    const parentDir = path.dirname(dir);
+    if (parentDir === dir) {
+        return undefined;
+    }
+    return findPnpmDir(parentDir);
 }
 
 //
-// Hoist modules in sourceDir to the root directory in the darget directory.
+// Compare modules by semantic version numbers.
 //
-async function hoist(sourceDir, targetDir) {
-    const moduleIndex = {};
-    await indexNodeModules(sourceDir, "", moduleIndex);
-    // console.log(moduleIndex);
-    await fs.ensureDir(targetDir);
-    await hoistModules(moduleIndex, targetDir);
+function compareVersionsDescending(a, b) {
+    const partsA = a.version.split('.').map(Number);
+    const partsB = b.version.split('.').map(Number);
+
+    for (let i = 0; i < partsA.length; i++) {
+        if (partsA[i] > partsB[i]) {
+            return -1; // Swap this with the original
+        }
+        if (partsA[i] < partsB[i]) {
+            return 1; // Swap this with the original
+        }
+    }
+    return 0;
+}
+
+//
+// Copies one dependency to the target directory.
+//
+async function _copyDependency(module, requiredVersion, requiredBy, targetDir, pnpmCacheDir, cachedModuleMap, copyMap) {
+    const targetModuleDir = path.join(targetDir, module.name);
+    const existingCopy = copyMap[module.name];
+    if (existingCopy) {
+        if (semver.satisfies(existingCopy.version, requiredVersion)) { //todo: requiredVersion could be undefined?!
+            //
+            // Already have copied a version that satisfies our requirements.
+            //
+            // console.log(`Already have a copy of ${existingCopy.name}@${existingCopy.version} that satisfies ${module.name}:${requiredVersion} required by ${requiredBy.name}`);
+            return 0; 
+        }
+
+        //
+        // Otherwise install the required version where it is needed.
+        //
+        const targetModuleVersionDir = path.join(requiredBy.targetDir, "node_modules", module.name);
+        await copyDir(module.dir, targetModuleVersionDir);
+        module.targetDir = targetModuleVersionDir;
+    }
+    else {
+        await copyDir(module.dir, targetModuleDir);
+        copyMap[module.name] = module;
+        module.targetDir = targetModuleDir;
+    }
+
+    const numDependencies = await copyDependencies(module, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+    return 1 + numDependencies;
+} 
+
+//
+// Copies a dependency to the target directory.
+//
+async function copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap) {
+    const installedModule = depTree.installedDependencies[moduleName];
+    if (installedModule) {
+        // Copy from local node_modules directory.
+        return await _copyDependency(installedModule, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+    }
+    else {
+        // Copy from .pnpm cache.
+        const cachedModule = cachedModuleMap[moduleName];
+        if (!cachedModule) {
+            throw new Error(`Could not find ${moduleName} in .pnpm cache.`);
+        }
+        else {
+            const cachedModuleVersions = Object.values(cachedModule);
+            cachedModuleVersions.sort(compareVersionsDescending);
+
+            //
+            // Find the first module that matches.
+            //
+            let lastSatisfyingVersion = undefined;
+
+            for (const cachedModuleVersion of cachedModuleVersions) {
+                if (!semver.satisfies(cachedModuleVersion.version, requiredVersion)) {
+                    if (semver.lt(cachedModuleVersion.version, semver.coerce(requiredVersion))) {
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                lastSatisfyingVersion = cachedModuleVersion;
+            }
+
+            if (lastSatisfyingVersion) {
+                return await _copyDependency(lastSatisfyingVersion, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+            }
+            else {
+                throw new Error(
+                    `Could not find a satisfying version of ${moduleName} in .pnpm cache.\r\n` +
+                    `Required version ${requiredVersion}.\r\n` +
+                    `Found versions:\r\n` +
+                    `  ` + cachedModuleVersions.map(v => v.version).join("\r\n  ")
+                );
+            }
+        }
+    }
+
+    return 0;
+}
+
+//
+// Copy all required dependencies to the target directory.
+//
+async function copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap) {
+	let numModules = 0;
+    for (const [moduleName, requiredVersion] of Object.entries(depTree.wantDependencies)) {
+    	numModules += await copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+    }
+    return numModules;
 }
 
 async function main() {
@@ -138,11 +225,9 @@ async function main() {
     const sourceDir = argv._[0];
     const targetDir = argv._[1];
 
-    console.log(`Hoisting modules from ${sourceDir} to ${targetDir}`);
-
     if (await fs.pathExists(targetDir)) {
         if (argv.force) {
-            console.log(`Removing existing target directory ${targetDir}`);
+            // console.log(`Removing existing target directory ${targetDir}`);
             await fs.remove(targetDir);
         }
         else {
@@ -150,12 +235,36 @@ async function main() {
         }
     }
 
-    await hoist(sourceDir, targetDir); 
+    const pnpmCacheDir = await findPnpmDir(sourceDir);
+    const cachedModuleMap = {};
+    if (pnpmCacheDir) {
+        const cachedModules = await fs.readdir(pnpmCacheDir);
+        for (const moduleName of cachedModules) {
+            const dir = path.join(pnpmCacheDir, moduleName, "node_modules");
+            for await (const dependency of readInstalledDependencies(dir)) {
+                const existingModule = cachedModuleMap[dependency.name];
+                if (!existingModule) {
+                    cachedModuleMap[dependency.name] = {
+                        [dependency.version]: dependency,
+                    };
+                }
+                else {
+                    existingModule[dependency.version] = dependency;
+                }
+            }
+        }
+    }
 
+    const depTree = await buildDependencyTree(sourceDir);
+    depTree.targetDir = targetDir;
+
+    const copyMap = {};
+    const numModules = await copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+    console.log(`Copied ${numModules} modules.`);
     console.log(`Done.`);
+
 }
 
 module.exports = {
-    hoist,
     main,
 };
