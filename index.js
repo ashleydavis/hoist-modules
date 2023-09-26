@@ -69,19 +69,19 @@ async function copyDir(srcDir, destDir) {
 
     const entries = await fs.readdir(srcDir, { withFileTypes: true });
 
-    for (let entry of entries) {
-        if (entry.name === "node_modules") {
-            // console.log(`Skipping nested node_modules directory in ${srcDir}`);
-            continue;
-        }
-        const srcPath = path.join(srcDir, entry.name);
-        const destPath = path.join(destDir, entry.name);
-        if (entry.isDirectory()) {
-            await copyDir(srcPath, destPath);
-        } else {
-            await fs.copy(srcPath, destPath);
-        }
-    }
+    await Promise.all(entries
+        .filter(entry => entry.name !== "node_modules")
+        .map(async entry => {
+            const srcPath = path.join(srcDir, entry.name);
+            const destPath = path.join(destDir, entry.name);
+            if (entry.isDirectory()) {
+                await copyDir(srcPath, destPath);
+            } 
+            else {
+                await fs.copy(srcPath, destPath);
+            }
+        })
+    );
 }
 
 //
@@ -124,7 +124,7 @@ async function _copyDependency(module, requiredVersion, requiredBy, targetDir, p
     const targetModuleDir = path.join(targetDir, module.name);
     const existingCopy = copyMap[module.name];
     if (existingCopy) {
-        if (semver.satisfies(existingCopy.version, requiredVersion)) { //todo: requiredVersion could be undefined?!
+        if (semver.satisfies(existingCopy.version, requiredVersion)) {
             //
             // Already have copied a version that satisfies our requirements.
             //
@@ -182,7 +182,6 @@ async function copyDependency(depTree, moduleName, requiredVersion, targetDir, p
                     continue;
                 }
 
-
                 lastSatisfyingVersion = cachedModuleVersion;
             }
 
@@ -235,6 +234,9 @@ async function main() {
         }
     }
 
+    console.time("total");
+    console.time("load-cache");
+
     const pnpmCacheDir = await findPnpmDir(sourceDir);
     const cachedModuleMap = {};
     if (pnpmCacheDir) {
@@ -254,15 +256,21 @@ async function main() {
             }
         }
     }
+    
+    console.timeLog("load-cache");
 
+    console.time("build-dependency-tree");
     const depTree = await buildDependencyTree(sourceDir);
     depTree.targetDir = targetDir;
+    console.timeLog("build-dependency-tree");
 
+    console.time("copy-modules");
     const copyMap = {};
     const numModules = await copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+    console.timeLog("copy-modules");
+    console.timeLog("total");
     console.log(`Copied ${numModules} modules.`);
     console.log(`Done.`);
-
 }
 
 module.exports = {
