@@ -6,7 +6,7 @@ const semver = require('semver');
 //
 // Reads the dependencies that are installed in a particular directory.
 //
-async function readInstalledDependencies(dir) {
+async function readInstalledDependencies(dir, options) {
     if (!await fs.pathExists(dir)) {
         // Nothing to see here.
         return [];
@@ -26,10 +26,10 @@ async function readInstalledDependencies(dir) {
                 const subDirPath = path.join(dir, subDir);
                 const packageJsonPath = path.join(subDirPath, "package.json");
                 if (await fs.pathExists(packageJsonPath)) {
-                    return [await buildDependencyTree(subDirPath)];
+                    return [await buildDependencyTree(subDirPath, options)];
                 }
                 else {
-                    return await readInstalledDependencies(subDirPath);
+                    return await readInstalledDependencies(subDirPath, options);
                 }
             })
     );
@@ -41,7 +41,7 @@ async function readInstalledDependencies(dir) {
 //
 // Builds the dependency tree for a module.
 //
-async function buildDependencyTree(dir) {
+async function buildDependencyTree(dir, options) {
 
     // Loads the package file.
     const packageJsonPath = path.join(dir, "package.json");
@@ -50,16 +50,21 @@ async function buildDependencyTree(dir) {
     // Determine dependencies in node_modules.
     const nodeModulesPath = path.join(dir, "node_modules");
     const installedDependencies = {};
-    const dependencies = await readInstalledDependencies(nodeModulesPath);
+    const dependencies = await readInstalledDependencies(nodeModulesPath, options);
     for (const dependency of dependencies) {
         installedDependencies[dependency.name] = dependency;
+    }
+
+    let wantDependencies = packageJson.dependencies || {};
+    if (options?.devDependencies) {
+        wantDependencies = Object.assign({}, wantDependencies, packageJson.devDependencies || {});
     }
 
     return {
         name: packageJson.name,
         version: packageJson.version,
         dir: dir,
-        wantDependencies: packageJson.dependencies || {},
+        wantDependencies,
         installedDependencies,
     };
 }
@@ -124,7 +129,7 @@ function compareVersionsDescending(a, b) {
 //
 // Copies one dependency to the target directory.
 //
-async function _copyDependency(module, requiredVersion, requiredBy, targetDir, pnpmCacheDir, cachedModuleMap, copyMap) {
+async function _copyDependency(module, requiredVersion, requiredBy, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
     const targetModuleDir = path.join(targetDir, module.name);
     const existingCopy = copyMap[module.name];
     if (existingCopy) {
@@ -149,24 +154,25 @@ async function _copyDependency(module, requiredVersion, requiredBy, targetDir, p
         module.targetDir = targetModuleDir;
     }
 
-    const numDependencies = await copyDependencies(module, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+    const numDependencies = await copyDependencies(module, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack);
     return 1 + numDependencies;
 } 
 
 //
 // Copies a dependency to the target directory.
 //
-async function copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap) {
+async function copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
     const installedModule = depTree.installedDependencies[moduleName];
     if (installedModule) {
         // Copy from local node_modules directory.
-        return await _copyDependency(installedModule, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+        return await _copyDependency(installedModule, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, [installedModule, ...depStack]);
     }
     else {
         // Copy from .pnpm cache.
         const cachedModule = cachedModuleMap[moduleName];
         if (!cachedModule) {
-            throw new Error(`Could not find ${moduleName} in .pnpm cache.`);
+            const stack = depStack.map(module => `\t${module.name}:${module.version}`).join("\r\n");
+            console.error(`Could not find ${moduleName}:${requiredVersion} in .pnpm cache. Required by:\r\n${stack}`);
         }
         else {
             const cachedModuleVersions = Object.values(cachedModule);
@@ -190,14 +196,15 @@ async function copyDependency(depTree, moduleName, requiredVersion, targetDir, p
             }
 
             if (lastSatisfyingVersion) {
-                return await _copyDependency(lastSatisfyingVersion, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+                return await _copyDependency(lastSatisfyingVersion, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, [lastSatisfyingVersion, ...depStack]);
             }
             else {
-                throw new Error(
-                    `Could not find a satisfying version of ${moduleName} in .pnpm cache.\r\n` +
-                    `Required version ${requiredVersion}.\r\n` +
+                const stack = depStack.map(module => `\t${module.name}:${module.version}`).join("\r\n");
+                console.error(
+                    `Could not find a satisfying version of ${moduleName}:${requiredVersion} in .pnpm cache.\r\n` +
                     `Found versions:\r\n` +
-                    `  ` + cachedModuleVersions.map(v => v.version).join("\r\n  ")
+                    `  ` + cachedModuleVersions.map(v => v.version).join("\r\n  ") + `\r\n` +
+                    `Required by:\r\n${stack}`
                 );
             }
         }
@@ -209,10 +216,10 @@ async function copyDependency(depTree, moduleName, requiredVersion, targetDir, p
 //
 // Copy all required dependencies to the target directory.
 //
-async function copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap) {
+async function copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
 	let numModules = 0;
     for (const [moduleName, requiredVersion] of Object.entries(depTree.wantDependencies)) {
-    	numModules += await copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+    	numModules += await copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack);
     }
     return numModules;
 }
@@ -220,7 +227,7 @@ async function copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMa
 //
 // Hoist all modules from the source module's "node_modules" to the target directory.
 //
-async function hoist(sourceDir, targetDir) {
+async function hoist(sourceDir, targetDir, options) {
 
     console.time("total");
     console.time("load-cache");
@@ -235,7 +242,7 @@ async function hoist(sourceDir, targetDir) {
         const cachedModules = await fs.readdir(pnpmCacheDir);
         for (const moduleName of cachedModules) {
             const dir = path.join(pnpmCacheDir, moduleName, "node_modules");
-            const dependencies = await readInstalledDependencies(dir);
+            const dependencies = await readInstalledDependencies(dir, options);
             for (const dependency of dependencies) {
                 const existingModule = cachedModuleMap[dependency.name];
                 if (!existingModule) {
@@ -253,13 +260,13 @@ async function hoist(sourceDir, targetDir) {
     console.timeLog("load-cache");
 
     console.time("build-dependency-tree");
-    const depTree = await buildDependencyTree(sourceDir);
+    const depTree = await buildDependencyTree(sourceDir, options);
     depTree.targetDir = targetDir;
     console.timeLog("build-dependency-tree");
 
     console.time("copy-modules");
     const copyMap = {};
-    const numModules = await copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap);
+    const numModules = await copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, [ depTree ]);
     console.timeLog("copy-modules");
     console.timeLog("total");
     console.log(`Copied ${numModules} modules.`);
@@ -275,6 +282,7 @@ async function main() {
     }
 
     const force = argv.force;
+    const devDependencies = argv.dev;
     const sourceDir = argv._[0];
     const targetDir = argv._[1];
 
@@ -288,7 +296,7 @@ async function main() {
         }
     }
 
-    await hoist(sourceDir, targetDir);
+    await hoist(sourceDir, targetDir, { devDependencies });
 }
 
 module.exports = {
