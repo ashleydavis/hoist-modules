@@ -217,26 +217,10 @@ async function copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMa
     return numModules;
 }
 
-async function main() {
-    var argv = minimist(process.argv.slice(2));
-    if (argv._.length !== 2) {
-        console.error(`Need two arguments.`);
-        console.error(`Usage: hoist-modules <sourceDir> <targetDir> [--force]`);
-        process.exit(1);
-    }
-
-    const sourceDir = argv._[0];
-    const targetDir = argv._[1];
-
-    if (await fs.pathExists(targetDir)) {
-        if (argv.force) {
-            // console.log(`Removing existing target directory ${targetDir}`);
-            await fs.remove(targetDir);
-        }
-        else {
-            throw new Error(`Target directory ${targetDir} already exists. Use --force to overwrite.`);
-        }
-    }
+//
+// Hoist all modules from the source module's "node_modules" to the target directory.
+//
+async function hoist(sourceDir, targetDir) {
 
     console.time("total");
     console.time("load-cache");
@@ -247,7 +231,7 @@ async function main() {
         const cachedModules = await fs.readdir(pnpmCacheDir);
         for (const moduleName of cachedModules) {
             const dir = path.join(pnpmCacheDir, moduleName, "node_modules");
-            const dependencies = await readInstalledDependencies(dir); 
+            const dependencies = await readInstalledDependencies(dir);
             for (const dependency of dependencies) {
                 const existingModule = cachedModuleMap[dependency.name];
                 if (!existingModule) {
@@ -261,7 +245,7 @@ async function main() {
             }
         }
     }
-    
+
     console.timeLog("load-cache");
 
     console.time("build-dependency-tree");
@@ -278,6 +262,32 @@ async function main() {
     console.log(`Done.`);
 }
 
+async function main() {
+    var argv = minimist(process.argv.slice(2));
+    if (argv._.length !== 2) {
+        console.error(`Need two arguments.`);
+        console.error(`Usage: hoist-modules <sourceDir> <targetDir> [--force]`);
+        process.exit(1);
+    }
+
+    const force = argv.force;
+    const sourceDir = argv._[0];
+    const targetDir = argv._[1];
+
+    if (await fs.pathExists(targetDir)) {
+        if (force) {
+            // console.log(`Removing existing target directory ${targetDir}`);
+            await fs.remove(targetDir);
+        }
+        else {
+            throw new Error(`Target directory ${targetDir} already exists. Use --force to overwrite.`);
+        }
+    }
+
+    await hoist(sourceDir, targetDir);
+}
+
 module.exports = {
+    hoist,
     main,
 };
