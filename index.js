@@ -228,6 +228,7 @@ async function hoist(sourceDir, targetDir) {
     const pnpmCacheDir = await findPnpmDir(sourceDir);
     const cachedModuleMap = {};
     if (pnpmCacheDir) {
+        console.log(`Found .pnpm directory at ${pnpmCacheDir}.`);
         const cachedModules = await fs.readdir(pnpmCacheDir);
         for (const moduleName of cachedModules) {
             const dir = path.join(pnpmCacheDir, moduleName, "node_modules");
