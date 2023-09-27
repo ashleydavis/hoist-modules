@@ -6,7 +6,7 @@ const semver = require('semver');
 //
 // Reads the dependencies that are installed in a particular directory.
 //
-async function readInstalledDependencies(dir, options) {
+async function readInstalledDependencies(dir, options, level) {
     if (!await fs.pathExists(dir)) {
         // Nothing to see here.
         return [];
@@ -26,10 +26,10 @@ async function readInstalledDependencies(dir, options) {
                 const subDirPath = path.join(dir, subDir);
                 const packageJsonPath = path.join(subDirPath, "package.json");
                 if (await fs.pathExists(packageJsonPath)) {
-                    return [await buildDependencyTree(subDirPath, options)];
+                    return [await buildDependencyTree(subDirPath, options, level + 1)];
                 }
                 else {
-                    return await readInstalledDependencies(subDirPath, options);
+                    return await readInstalledDependencies(subDirPath, options, level);
                 }
             })
     );
@@ -41,7 +41,7 @@ async function readInstalledDependencies(dir, options) {
 //
 // Builds the dependency tree for a module.
 //
-async function buildDependencyTree(dir, options) {
+async function buildDependencyTree(dir, options, level) {
 
     // Loads the package file.
     const packageJsonPath = path.join(dir, "package.json");
@@ -50,13 +50,14 @@ async function buildDependencyTree(dir, options) {
     // Determine dependencies in node_modules.
     const nodeModulesPath = path.join(dir, "node_modules");
     const installedDependencies = {};
-    const dependencies = await readInstalledDependencies(nodeModulesPath, options);
+    const dependencies = await readInstalledDependencies(nodeModulesPath, options, level);
     for (const dependency of dependencies) {
         installedDependencies[dependency.name] = dependency;
     }
 
     let wantDependencies = packageJson.dependencies || {};
-    if (options?.devDependencies) {
+    if (level < 1 && options?.devDependencies) {
+        // Only consider devDependencies at the top level.
         wantDependencies = Object.assign({}, wantDependencies, packageJson.devDependencies || {});
     }
 
@@ -164,15 +165,16 @@ async function _copyDependency(module, requiredVersion, requiredBy, targetDir, p
 async function copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
     const installedModule = depTree.installedDependencies[moduleName];
     if (installedModule) {
-        // Copy from local node_modules directory.
+        // If already installed at this level of the dependency tree, just assume that this is the correct version.
+        // Then copy it from local node_modules directory.
         return await _copyDependency(installedModule, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, [installedModule, ...depStack]);
     }
     else {
-        // Copy from .pnpm cache.
+        // Othwerise copy it from .pnpm cache.
         const cachedModule = cachedModuleMap[moduleName];
         if (!cachedModule) {
             const stack = depStack.map(module => `\t${module.name}:${module.version}`).join("\r\n");
-            console.error(`Could not find ${moduleName}:${requiredVersion} in .pnpm cache. Required by:\r\n${stack}`);
+            throw new Error(`Could not find ${moduleName}:${requiredVersion} in .pnpm cache. Required by:\r\n${stack}`);
         }
         else {
             const cachedModuleVersions = Object.values(cachedModule);
@@ -200,7 +202,7 @@ async function copyDependency(depTree, moduleName, requiredVersion, targetDir, p
             }
             else {
                 const stack = depStack.map(module => `\t${module.name}:${module.version}`).join("\r\n");
-                console.error(
+                throw new Error(
                     `Could not find a satisfying version of ${moduleName}:${requiredVersion} in .pnpm cache.\r\n` +
                     `Found versions:\r\n` +
                     `  ` + cachedModuleVersions.map(v => v.version).join("\r\n  ") + `\r\n` +
@@ -242,7 +244,7 @@ async function hoist(sourceDir, targetDir, options) {
         const cachedModules = await fs.readdir(pnpmCacheDir);
         for (const moduleName of cachedModules) {
             const dir = path.join(pnpmCacheDir, moduleName, "node_modules");
-            const dependencies = await readInstalledDependencies(dir, options);
+            const dependencies = await readInstalledDependencies(dir, options, 1); // Start at level 1 so as not to consider dev deps.
             for (const dependency of dependencies) {
                 const existingModule = cachedModuleMap[dependency.name];
                 if (!existingModule) {
@@ -260,7 +262,7 @@ async function hoist(sourceDir, targetDir, options) {
     console.timeLog("load-cache");
 
     console.time("build-dependency-tree");
-    const depTree = await buildDependencyTree(sourceDir, options);
+    const depTree = await buildDependencyTree(sourceDir, options, 0);
     depTree.targetDir = targetDir;
     console.timeLog("build-dependency-tree");
 
