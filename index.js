@@ -9,33 +9,33 @@ const semver = require('semver');
 async function readInstalledDependencies(dir) {
     if (!await fs.pathExists(dir)) {
         // Nothing to see here.
-        return undefined;
+        return [];
     }
 
     const stat = await fs.stat(dir);
     if (!stat.isDirectory()) {
         // It's not actually a subdirectory.
-        return undefined;
+        return [];
     }
 
-    let output = [];
     const subDirs = await fs.readdir(dir);
-    for (const subDir of subDirs) {
-        if (subDir === ".bin") {
-            continue;
-        }
+    const promises = Promise.all(
+        subDirs
+            .filter(subDir => subDir !== ".bin")
+            .map(async subDir => {
+                const subDirPath = path.join(dir, subDir);
+                const packageJsonPath = path.join(subDirPath, "package.json");
+                if (await fs.pathExists(packageJsonPath)) {
+                    return [await buildDependencyTree(subDirPath)];
+                }
+                else {
+                    return await readInstalledDependencies(subDirPath);
+                }
+            })
+    );
 
-        const subDirPath = path.join(dir, subDir);
-        const packageJsonPath = path.join(subDirPath, "package.json");
-        if (await fs.pathExists(packageJsonPath)) {
-            output.push(await buildDependencyTree(subDirPath));
-        }
-        else {
-            output = output.concat(await readInstalledDependencies(subDirPath));
-        }
-    }
-
-    return output;
+    const dependencies = await promises;
+    return dependencies.flat();
 }
 
 //
@@ -51,10 +51,8 @@ async function buildDependencyTree(dir) {
     const nodeModulesPath = path.join(dir, "node_modules");
     const installedDependencies = {};
     const dependencies = await readInstalledDependencies(nodeModulesPath);
-    if (dependencies) {
-        for (const dependency of dependencies) {
-            installedDependencies[dependency.name] = dependency;
-        }
+    for (const dependency of dependencies) {
+        installedDependencies[dependency.name] = dependency;
     }
 
     return {
@@ -250,17 +248,15 @@ async function main() {
         for (const moduleName of cachedModules) {
             const dir = path.join(pnpmCacheDir, moduleName, "node_modules");
             const dependencies = await readInstalledDependencies(dir); 
-            if (dependencies) {
-                for (const dependency of dependencies) {
-                    const existingModule = cachedModuleMap[dependency.name];
-                    if (!existingModule) {
-                        cachedModuleMap[dependency.name] = {
-                            [dependency.version]: dependency,
-                        };
-                    }
-                    else {
-                        existingModule[dependency.version] = dependency;
-                    }
+            for (const dependency of dependencies) {
+                const existingModule = cachedModuleMap[dependency.name];
+                if (!existingModule) {
+                    cachedModuleMap[dependency.name] = {
+                        [dependency.version]: dependency,
+                    };
+                }
+                else {
+                    existingModule[dependency.version] = dependency;
                 }
             }
         }
