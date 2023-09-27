@@ -225,6 +225,9 @@ async function hoist(sourceDir, targetDir) {
     console.time("total");
     console.time("load-cache");
 
+    sourceDir = path.resolve(sourceDir);
+    targetDir = path.resolve(targetDir);
+
     const pnpmCacheDir = await findPnpmDir(sourceDir);
     const cachedModuleMap = {};
     if (pnpmCacheDir) {
