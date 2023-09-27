@@ -6,18 +6,19 @@ const semver = require('semver');
 //
 // Reads the dependencies that are installed in a particular directory.
 //
-async function* readInstalledDependencies(dir) {
+async function readInstalledDependencies(dir) {
     if (!await fs.pathExists(dir)) {
         // Nothing to see here.
-        return;
+        return undefined;
     }
 
     const stat = await fs.stat(dir);
     if (!stat.isDirectory()) {
         // It's not actually a subdirectory.
-        return;
+        return undefined;
     }
 
+    let output = [];
     const subDirs = await fs.readdir(dir);
     for (const subDir of subDirs) {
         if (subDir === ".bin") {
@@ -27,12 +28,14 @@ async function* readInstalledDependencies(dir) {
         const subDirPath = path.join(dir, subDir);
         const packageJsonPath = path.join(subDirPath, "package.json");
         if (await fs.pathExists(packageJsonPath)) {
-            yield await buildDependencyTree(subDirPath);
+            output.push(await buildDependencyTree(subDirPath));
         }
         else {
-            yield* await readInstalledDependencies(subDirPath);
+            output = output.concat(await readInstalledDependencies(subDirPath));
         }
     }
+
+    return output;
 }
 
 //
@@ -47,8 +50,11 @@ async function buildDependencyTree(dir) {
     // Determine dependencies in node_modules.
     const nodeModulesPath = path.join(dir, "node_modules");
     const installedDependencies = {};
-    for await (const dependency of readInstalledDependencies(nodeModulesPath)) {
-        installedDependencies[dependency.name] = dependency;
+    const dependencies = await readInstalledDependencies(nodeModulesPath);
+    if (dependencies) {
+        for (const dependency of dependencies) {
+            installedDependencies[dependency.name] = dependency;
+        }
     }
 
     return {
@@ -243,15 +249,18 @@ async function main() {
         const cachedModules = await fs.readdir(pnpmCacheDir);
         for (const moduleName of cachedModules) {
             const dir = path.join(pnpmCacheDir, moduleName, "node_modules");
-            for await (const dependency of readInstalledDependencies(dir)) {
-                const existingModule = cachedModuleMap[dependency.name];
-                if (!existingModule) {
-                    cachedModuleMap[dependency.name] = {
-                        [dependency.version]: dependency,
-                    };
-                }
-                else {
-                    existingModule[dependency.version] = dependency;
+            const dependencies = await readInstalledDependencies(dir); 
+            if (dependencies) {
+                for (const dependency of dependencies) {
+                    const existingModule = cachedModuleMap[dependency.name];
+                    if (!existingModule) {
+                        cachedModuleMap[dependency.name] = {
+                            [dependency.version]: dependency,
+                        };
+                    }
+                    else {
+                        existingModule[dependency.version] = dependency;
+                    }
                 }
             }
         }
