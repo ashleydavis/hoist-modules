@@ -163,6 +163,14 @@ async function _copyDependency(module, requiredVersion, requiredBy, targetDir, p
 // Copies a dependency to the target directory.
 //
 async function copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
+
+    if (requiredVersion.startsWith("npm:")) {
+        const parts = requiredVersion.substring(4).split("@")
+        console.log(`Translated ${moduleName}:${requiredVersion} to ${parts[0]}@${parts[1]}`);
+        moduleName = parts[0];
+        requiredVersion = parts[1];
+    }
+    
     const installedModule = depTree.installedDependencies[moduleName];
     if (installedModule) {
         // If already installed at this level of the dependency tree, just assume that this is the correct version.
