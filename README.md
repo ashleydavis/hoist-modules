@@ -35,11 +35,17 @@ npm install
 Run it:
 
 ```bash
-npm run start -- <root-node_modules-directory> <target-dir> -- --force
+npm run start -- <root-node_modules-directory> <target-dir> --force
 ```
 
 Or run it with live reload: 
 
 ```bash
-npm run dev -- <root-node_modules-directory> <target-dir> -- --force
+npm run dev -- <root-node_modules-directory> <target-dir> --force
+```
+
+To include dev dependencies:
+
+```bash
+npm run start -- <root-node_modules-directory> <target-dir> --dev
 ```

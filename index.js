@@ -95,6 +95,22 @@ async function copyDir(srcDir, destDir) {
 }
 
 //
+// Finds the parent node_modules directory, if it exists.
+//
+async function findParentNodeModules(dir) {
+    const parentDir = path.dirname(dir);
+    if (parentDir === dir) {
+        return undefined;
+    }
+    const nodeModulesDir = path.join(parentDir, "node_modules");
+    if (await fs.pathExists(nodeModulesDir)) {
+        return nodeModulesDir;
+    }
+
+    return findParentNodeModules(parentDir);
+}
+
+//
 // Finds the pnpm directory, if it exists.
 //
 async function findPnpmDir(dir) {
@@ -130,7 +146,7 @@ function compareVersionsDescending(a, b) {
 //
 // Copies one dependency to the target directory.
 //
-async function _copyDependency(module, requiredVersion, requiredBy, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
+async function _copyDependency(module, requiredVersion, requiredBy, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
     const targetModuleDir = path.join(targetDir, module.name);
     const existingCopy = copyMap[module.name];
     if (existingCopy) {
@@ -155,14 +171,19 @@ async function _copyDependency(module, requiredVersion, requiredBy, targetDir, p
         module.targetDir = targetModuleDir;
     }
 
-    const numDependencies = await copyDependencies(module, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack);
+    const numDependencies = await copyDependencies(module, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, depStack);
     return 1 + numDependencies;
 } 
 
 //
+// Cached modules from the parent node_modules directory.
+//
+let cachedParentModules = undefined;
+
+//
 // Copies a dependency to the target directory.
 //
-async function copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
+async function copyDependency(depTree, moduleName, requiredVersion, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
 
     if (requiredVersion.startsWith("npm:")) {
         const parts = requiredVersion.substring(4).split("@")
@@ -175,48 +196,71 @@ async function copyDependency(depTree, moduleName, requiredVersion, targetDir, p
     if (installedModule) {
         // If already installed at this level of the dependency tree, just assume that this is the correct version.
         // Then copy it from local node_modules directory.
-        return await _copyDependency(installedModule, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, [installedModule, ...depStack]);
+        return await _copyDependency(installedModule, requiredVersion, depTree, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, [installedModule, ...depStack]);
     }
-    else {
-        // Othwerise copy it from .pnpm cache.
-        const cachedModule = cachedModuleMap[moduleName];
-        if (!cachedModule) {
-            const stack = depStack.map(module => `\t${module.name}:${module.version}`).join("\r\n");
-            throw new Error(`Could not find ${moduleName}:${requiredVersion} in .pnpm cache. Required by:\r\n${stack}`);
+
+    //
+    // Find node_modules in parent directory.
+    //
+    if (!cachedParentModules) {
+        if (parentNodeModules) {
+            cachedParentModules = await readInstalledDependencies(parentNodeModules, { devDependencies: true }, 0);
         }
         else {
-            const cachedModuleVersions = Object.values(cachedModule);
-            cachedModuleVersions.sort(compareVersionsDescending);
+            cachedParentModules = [];
+        }
+    }
 
-            //
-            // Find the first module that matches.
-            //
-            let lastSatisfyingVersion = undefined;
+    //
+    // Try to copy the dependency from the parent node_modules directory.
+    //
+    const installedDependencies = await readInstalledDependencies(parentNodeModules, { devDependencies: true }, 0); //todo: be good to cache this!
+    for (const installedDependency of installedDependencies) {
+        if (installedDependency.name === moduleName) {
+            return await _copyDependency(installedDependency, requiredVersion, depTree, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, [installedDependency, ...depStack]);
+        }
+    }
+    
+    //
+    // Otherwise try to copy it from .pnpm cache.
+    //
+    const cachedModule = cachedModuleMap[moduleName];
+    if (!cachedModule) {
+        const stack = depStack.map(module => `\t${module.name}:${module.version}`).join("\r\n");
+        throw new Error(`Could not find ${moduleName}:${requiredVersion} in .pnpm cache. Required by:\r\n${stack}`);
+    }
+    else {
+        const cachedModuleVersions = Object.values(cachedModule);
+        cachedModuleVersions.sort(compareVersionsDescending);
 
-            for (const cachedModuleVersion of cachedModuleVersions) {
-                if (!semver.satisfies(cachedModuleVersion.version, requiredVersion)) {
-                    if (semver.lt(cachedModuleVersion.version, semver.coerce(requiredVersion))) {
-                        break;
-                    }
+        //
+        // Find the first module that matches.
+        //
+        let lastSatisfyingVersion = undefined;
 
-                    continue;
+        for (const cachedModuleVersion of cachedModuleVersions) {
+            if (!semver.satisfies(cachedModuleVersion.version, requiredVersion)) {
+                if (semver.lt(cachedModuleVersion.version, semver.coerce(requiredVersion))) {
+                    break;
                 }
 
-                lastSatisfyingVersion = cachedModuleVersion;
+                continue;
             }
 
-            if (lastSatisfyingVersion) {
-                return await _copyDependency(lastSatisfyingVersion, requiredVersion, depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, [lastSatisfyingVersion, ...depStack]);
-            }
-            else {
-                const stack = depStack.map(module => `\t${module.name}:${module.version}`).join("\r\n");
-                throw new Error(
-                    `Could not find a satisfying version of ${moduleName}:${requiredVersion} in .pnpm cache.\r\n` +
-                    `Found versions:\r\n` +
-                    `  ` + cachedModuleVersions.map(v => v.version).join("\r\n  ") + `\r\n` +
-                    `Required by:\r\n${stack}`
-                );
-            }
+            lastSatisfyingVersion = cachedModuleVersion;
+        }
+
+        if (lastSatisfyingVersion) {
+            return await _copyDependency(lastSatisfyingVersion, requiredVersion, depTree, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, [lastSatisfyingVersion, ...depStack]);
+        }
+        else {
+            const stack = depStack.map(module => `\t${module.name}:${module.version}`).join("\r\n");
+            throw new Error(
+                `Could not find a satisfying version of ${moduleName}:${requiredVersion} in .pnpm cache.\r\n` +
+                `Found versions:\r\n` +
+                `  ` + cachedModuleVersions.map(v => v.version).join("\r\n  ") + `\r\n` +
+                `Required by:\r\n${stack}`
+            );
         }
     }
 
@@ -226,10 +270,10 @@ async function copyDependency(depTree, moduleName, requiredVersion, targetDir, p
 //
 // Copy all required dependencies to the target directory.
 //
-async function copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
+async function copyDependencies(depTree, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, depStack) {
 	let numModules = 0;
     for (const [moduleName, requiredVersion] of Object.entries(depTree.wantDependencies)) {
-    	numModules += await copyDependency(depTree, moduleName, requiredVersion, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, depStack);
+    	numModules += await copyDependency(depTree, moduleName, requiredVersion, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, depStack);
     }
     return numModules;
 }
@@ -245,6 +289,7 @@ async function hoist(sourceDir, targetDir, options) {
     sourceDir = path.resolve(sourceDir);
     targetDir = path.resolve(targetDir);
 
+    const parentNodeModules = await findParentNodeModules(sourceDir);
     const pnpmCacheDir = await findPnpmDir(sourceDir);
     const cachedModuleMap = {};
     if (pnpmCacheDir) {
@@ -276,7 +321,7 @@ async function hoist(sourceDir, targetDir, options) {
 
     console.time("copy-modules");
     const copyMap = {};
-    const numModules = await copyDependencies(depTree, targetDir, pnpmCacheDir, cachedModuleMap, copyMap, [ depTree ]);
+    const numModules = await copyDependencies(depTree, targetDir, parentNodeModules, pnpmCacheDir, cachedModuleMap, copyMap, [ depTree ]);
     console.timeLog("copy-modules");
     console.timeLog("total");
     console.log(`Copied ${numModules} modules.`);
@@ -287,7 +332,7 @@ async function main() {
     var argv = minimist(process.argv.slice(2));
     if (argv._.length !== 2) {
         console.error(`Need two arguments.`);
-        console.error(`Usage: hoist-modules <sourceDir> <targetDir> [--force]`);
+        console.error(`Usage: hoist-modules <sourceDir> <targetDir> [--force] [--dev]`);
         process.exit(1);
     }
 
